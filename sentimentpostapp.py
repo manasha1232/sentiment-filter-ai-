@@ -112,6 +112,13 @@ st.markdown("""
     .ai-rewrite {
         border: 2px dashed #9b59b6;
     }
+    .extreme-negative {
+        background-color: #ffcccc;
+        padding: 1rem;
+        border-radius: 8px;
+        border-left: 4px solid #ff0000;
+        margin: 1rem 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -119,53 +126,101 @@ class EnhancedNegativityAnalyzer:
     def __init__(self):
         self.analyzer = SentimentIntensityAnalyzer()
         
-        # Enhanced negative word list with weights
+        # Enhanced negative word list with much higher weights
         self.negative_lexicon = {
-            'hate': 0.9, 'despise': 0.9, 'loathe': 0.9, 'terrible': 0.8, 'awful': 0.8,
-            'horrible': 0.8, 'disgusting': 0.85, 'useless': 0.7, 'worthless': 0.8,
-            'garbage': 0.8, 'trash': 0.7, 'shit': 0.9, 'crap': 0.7, 'fuck': 0.9,
-            'damn': 0.6, 'hell': 0.6, 'stupid': 0.7, 'idiot': 0.8, 'moron': 0.8,
-            'ridiculous': 0.6, 'pathetic': 0.8, 'disaster': 0.7, 'broken': 0.6,
-            'furious': 0.8, 'angry': 0.7, 'pissed': 0.8, 'annoying': 0.6,
-            'never': 0.5, 'worst': 0.9, 'horrendous': 0.9, 'appalling': 0.8,
-            'unacceptable': 0.7, 'failure': 0.7, 'waste': 0.6, 'pointless': 0.7
+            # Extreme swear words (highest weight)
+            'fucking': 1.0, 'shit': 1.0, 'fuck': 1.0, 'assholes': 0.95, 'bullshit': 0.95,
+            'garbage': 0.9, 'trash': 0.85, 'crap': 0.8, 'damn': 0.7, 'hell': 0.7,
+            
+            # Strong negative emotions
+            'hate': 0.9, 'despise': 0.9, 'loathe': 0.9, 'furious': 0.85, 'pissed': 0.85,
+            
+            # Extreme negative adjectives
+            'worst': 0.95, 'horrible': 0.9, 'terrible': 0.9, 'awful': 0.9, 'disgusting': 0.9,
+            'useless': 0.8, 'worthless': 0.85, 'pathetic': 0.85, 'ridiculous': 0.75,
+            
+            # Personal attacks
+            'morons': 0.95, 'idiot': 0.9, 'stupid': 0.85, 'incompetent': 0.8, 'dumb': 0.8,
+            
+            # Problem words
+            'broken': 0.7, 'crashes': 0.7, 'disaster': 0.8, 'failure': 0.8,
+            'never': 0.6, 'waste': 0.7, 'pointless': 0.75
         }
+        
+        # Intensifiers that boost negativity
+        self.intensifiers = {'absolutely', 'completely', 'totally', 'utterly', 'extremely', 'very', 'constantly'}
     
     def calculate_enhanced_negativity(self, text):
-        """Enhanced negativity calculation combining VADER and custom lexicon"""
+        """Enhanced negativity calculation with boosted scoring"""
         text_lower = text.lower()
         
         # Get VADER score
         vader_scores = self.analyzer.polarity_scores(text)
         vader_negativity = vader_scores['neg'] * 100
         
-        # Calculate lexicon-based negativity
+        # Calculate lexicon-based negativity with intensity boosting
         try:
             words = word_tokenize(text_lower)
         except:
-            # Fallback to simple split if tokenization fails
             words = text_lower.split()
             
         lexicon_score = 0
         negative_word_count = 0
+        intensity_multiplier = 1.0
         
-        for word in words:
+        for i, word in enumerate(words):
             # Clean the word
             clean_word = re.sub(r'[^\w\s]', '', word)
+            
+            # Check for intensifiers
+            if clean_word in self.intensifiers:
+                intensity_multiplier = 1.5  # Boost next negative word
+                continue
+                
             if clean_word in self.negative_lexicon:
-                lexicon_score += self.negative_lexicon[clean_word]
+                base_score = self.negative_lexicon[clean_word]
+                boosted_score = base_score * intensity_multiplier
+                lexicon_score += boosted_score
                 negative_word_count += 1
+                intensity_multiplier = 1.0  # Reset multiplier
         
-        # Normalize lexicon score to percentage
+        # Calculate sentence structure negativity
+        structure_score = self.analyze_sentence_structure(text)
+        
+        # Normalize lexicon score to percentage (more aggressive)
         if words:
-            lexicon_negativity = (lexicon_score / len(words)) * 100
+            lexicon_negativity = min((lexicon_score / len(words)) * 200, 100)  # Highly boosted scaling
         else:
             lexicon_negativity = 0
         
-        # Combine both scores (weighted average)
-        final_negativity = (vader_negativity * 0.6) + (lexicon_negativity * 0.4)
+        # Combine scores with more weight to lexicon
+        final_negativity = (vader_negativity * 0.2) + (lexicon_negativity * 0.6) + (structure_score * 0.2)
         
         return min(final_negativity, 100), vader_scores, negative_word_count
+    
+    def analyze_sentence_structure(self, text):
+        """Analyze sentence structure for additional negativity cues"""
+        score = 0
+        
+        # Check for all caps (shouting)
+        if re.search(r'\b[A-Z]{4,}\b', text):
+            score += 25
+        
+        # Check for multiple exclamation points
+        if text.count('!') >= 2:
+            score += 20
+        
+        # Check for aggressive language patterns
+        aggressive_patterns = [
+            r'should be fired', r'never.*again', r'worst.*ever', 
+            r'complete.*waste', r'total.*disaster', r'absolute.*garbage'
+        ]
+        
+        for pattern in aggressive_patterns:
+            if re.search(pattern, text.lower()):
+                score += 15
+        
+        return min(score, 40)  # Cap structure score
     
     def analyze_sentence_level_negativity(self, text):
         """Analyze negativity at sentence level"""
@@ -190,10 +245,10 @@ class EnhancedNegativityAnalyzer:
             return "Positive", "#4CAF50"
         elif negativity_score < 50:
             return "Neutral", "#FFA500"
-        elif negativity_score < 75:
+        elif negativity_score < 80:
             return "Negative", "#FF6B6B"
         else:
-            return "Highly Negative", "#DC143C"
+            return "Extremely Negative", "#DC143C"
 
 class TextRewriter:
     def __init__(self):
@@ -231,20 +286,25 @@ class TextRewriter:
     def rule_based_rewrite(self, text):
         """Rule-based text rewriting to reduce negativity"""
         replacement_patterns = {
-            r'\b(hate|detest|despise)\b': 'dislike',
-            r'\b(awful|terrible|horrible)\b': 'disappointing',
-            r'\b(stupid|idiotic|dumb)\b': 'unwise',
-            r'\b(shit|crap|garbage)\b': 'disappointing',
+            r'\b(fucking|shit|fuck|bullshit)\b': '',
+            r'\b(hate|detest|despise)\b': 'strongly dislike',
+            r'\b(awful|terrible|horrible|disgusting)\b': 'disappointing',
+            r'\b(stupid|idiotic|dumb|morons|incompetent)\b': 'could be improved',
+            r'\b(garbage|trash|crap)\b': 'needs work',
             r'\b(pissed|angry|furious)\b': 'frustrated',
             r'\b(useless|worthless|pointless)\b': 'ineffective',
             r'\b(mess|disaster|catastrophe)\b': 'challenging situation',
             r'\b(fail|screw up|mess up)\b': 'could be improved',
-            r'\b(never|always|everyone|nobody)\b': 'often/many',
+            r'\b(never)\b': 'rarely',
+            r'\b(worst)\b': 'needs improvement',
         }
         
         rewritten = text
         for pattern, replacement in replacement_patterns.items():
             rewritten = re.sub(pattern, replacement, rewritten, flags=re.IGNORECASE)
+        
+        # Remove double spaces caused by word removal
+        rewritten = re.sub(r'\s+', ' ', rewritten).strip()
         
         return rewritten
     
@@ -336,9 +396,9 @@ def main():
     # Header Section
     st.markdown("""
     <div class="header-section">
-        <h1 style="margin:0; font-size: 2.5rem;">Advanced Negativity Analysis Platform</h1>
+        <h1 style="margin:0; font-size: 2.5rem;">Enhanced Negativity Analysis Platform</h1>
         <p style="margin:0; font-size: 1.1rem; opacity: 0.9;">
-        AI-powered sentiment analysis with intelligent rewriting
+        Advanced AI-powered sentiment analysis with intelligent rewriting
         </p>
     </div>
     """, unsafe_allow_html=True)
@@ -358,6 +418,20 @@ def main():
         st.warning("⚠️ OpenAI not configured - using rule-based rewriting only")
         st.info("To enable AI rewriting, create a .env file with your OPENAI_API_KEY")
     
+    # Quick test buttons
+    st.markdown("### Quick Test Posts")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("Test High Negativity", use_container_width=True):
+            test_text = "I absolutely fucking hate this garbage piece of shit app. It never works, constantly crashes, and is the worst software I've ever used. The developers are complete morons who should be fired immediately."
+            st.session_state.user_input = test_text
+    
+    with col2:
+        if st.button("Test Medium Negativity", use_container_width=True):
+            test_text = "This product is quite disappointing. It has many issues and doesn't work as expected. I'm frustrated with the poor performance."
+            st.session_state.user_input = test_text
+    
     # Input Section
     st.markdown("### Analyze Your Text")
     user_text = st.text_area(
@@ -369,7 +443,7 @@ def main():
     
     if st.button("Analyze Sentiment", use_container_width=True):
         if user_text.strip():
-            with st.spinner("Analyzing sentiment..."):
+            with st.spinner("Analyzing sentiment with enhanced algorithm..."):
                 # Perform enhanced analysis
                 negativity_score, full_scores, negative_words = st.session_state.analyzer.calculate_enhanced_negativity(user_text)
                 sentence_analysis = st.session_state.analyzer.analyze_sentence_level_negativity(user_text)
@@ -435,12 +509,20 @@ def main():
         
         # Negativity Alert and Rewriting Options
         if results['negativity_score'] > 50:
-            st.markdown(f"""
-            <div class="negative-alert">
-                <h4 style="color: #DC143C; margin:0;">⚠️ High Negativity Detected</h4>
-                <p style="margin:0.5rem 0 0 0;">This text exceeds the 50% negativity threshold and may be blocked from posting.</p>
-            </div>
-            """, unsafe_allow_html=True)
+            if results['negativity_score'] > 80:
+                st.markdown(f"""
+                <div class="extreme-negative">
+                    <h4 style="color: #DC143C; margin:0;">🚫 EXTREME NEGATIVITY DETECTED</h4>
+                    <p style="margin:0.5rem 0 0 0;">This text shows extremely high negativity ({results['negativity_score']:.1f}%) and requires rewriting before posting.</p>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown(f"""
+                <div class="negative-alert">
+                    <h4 style="color: #DC143C; margin:0;">⚠️ High Negativity Detected</h4>
+                    <p style="margin:0.5rem 0 0 0;">This text exceeds the 50% negativity threshold and may be blocked from posting.</p>
+                </div>
+                """, unsafe_allow_html=True)
             
             st.markdown("### Rewriting Options")
             st.info("Select a rewritten version below to reduce negativity while maintaining your message.")
@@ -502,7 +584,7 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style="text-align: center; color: #666; font-size: 0.9rem;">
-        <p>Advanced Negativity Analysis Platform • Powered by VADER + OpenAI • Professional Communication Assistant</p>
+        <p>Enhanced Negativity Analysis Platform • Powered by Advanced VADER + OpenAI • Professional Communication Assistant</p>
     </div>
     """, unsafe_allow_html=True)
 
