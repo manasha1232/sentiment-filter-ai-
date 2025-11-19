@@ -1,6 +1,4 @@
-streamlit==1.38.0
+streamlit==1.39.0
 vaderSentiment==3.3.2
-transformers==4.38.0
-torch==2.2.0
-sentencepiece
-protobuf
+pandas
+matplotlib
