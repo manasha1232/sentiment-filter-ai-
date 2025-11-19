@@ -163,6 +163,7 @@ with col1:
 with col2:
     st.markdown("## Notes")
     st.write("- Limit for blocking is set to **50% negativity**.")
-    st.write("- Rewrites are rule-based (no heavy ML) and aim to reduce harsh words and reframe the message.")
-    st.write("- For higher-quality rewrites you can integrate an external API (HuggingFace Inference API) later.")
+    st.write("- Rewrites are rule-based and aim to reduce harsh words and reframe the message.")
+    
     st.write("- Use the Select button below any rewritten option to pick it as the final text.")
+
