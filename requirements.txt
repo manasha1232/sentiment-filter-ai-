@@ -1,0 +1,5 @@
+streamlit
+vaderSentiment
+transformers
+torch
+huggingface_hub
