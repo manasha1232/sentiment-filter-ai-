@@ -4,10 +4,22 @@ import pandas as pd
 import re
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 import nltk
-from nltk.tokenize import word_tokenize
 import os
 from openai import OpenAI
 from dotenv import load_dotenv
+
+# Download required NLTK data
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    nltk.download('punkt')
+
+try:
+    nltk.data.find('corpora/wordnet')
+except LookupError:
+    nltk.download('wordnet')
+
+from nltk.tokenize import word_tokenize
 
 # Load environment variables
 load_dotenv()
@@ -128,13 +140,20 @@ class EnhancedNegativityAnalyzer:
         vader_negativity = vader_scores['neg'] * 100
         
         # Calculate lexicon-based negativity
-        words = word_tokenize(text_lower)
+        try:
+            words = word_tokenize(text_lower)
+        except:
+            # Fallback to simple split if tokenization fails
+            words = text_lower.split()
+            
         lexicon_score = 0
         negative_word_count = 0
         
         for word in words:
-            if word in self.negative_lexicon:
-                lexicon_score += self.negative_lexicon[word]
+            # Clean the word
+            clean_word = re.sub(r'[^\w\s]', '', word)
+            if clean_word in self.negative_lexicon:
+                lexicon_score += self.negative_lexicon[clean_word]
                 negative_word_count += 1
         
         # Normalize lexicon score to percentage
