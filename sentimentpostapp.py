@@ -1,22 +1,16 @@
+# sentimentpostapp.py
 import streamlit as st
 import pandas as pd
 import re
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 import nltk
 from nltk.tokenize import word_tokenize
-from nltk.corpus import wordnet
-import requests
-import json
+import os
+from openai import OpenAI
+from dotenv import load_dotenv
 
-# Download required NLTK data
-try:
-    nltk.data.find('tokenizers/punkt')
-except LookupError:
-    nltk.download('punkt')
-try:
-    nltk.data.find('corpora/wordnet')
-except LookupError:
-    nltk.download('wordnet')
+# Load environment variables
+load_dotenv()
 
 # Configure the page
 st.set_page_config(
@@ -103,30 +97,69 @@ st.markdown("""
         border: 3px solid #9b59b6;
         background-color: #e8daff;
     }
+    .ai-rewrite {
+        border: 2px dashed #9b59b6;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-class AdvancedNegativityAnalyzer:
+class EnhancedNegativityAnalyzer:
     def __init__(self):
         self.analyzer = SentimentIntensityAnalyzer()
         
-    def calculate_negativity_percentage(self, text):
-        """Calculate negativity percentage using VADER sentiment analysis"""
-        scores = self.analyzer.polarity_scores(text)
-        return scores['neg'] * 100, scores
+        # Enhanced negative word list with weights
+        self.negative_lexicon = {
+            'hate': 0.9, 'despise': 0.9, 'loathe': 0.9, 'terrible': 0.8, 'awful': 0.8,
+            'horrible': 0.8, 'disgusting': 0.85, 'useless': 0.7, 'worthless': 0.8,
+            'garbage': 0.8, 'trash': 0.7, 'shit': 0.9, 'crap': 0.7, 'fuck': 0.9,
+            'damn': 0.6, 'hell': 0.6, 'stupid': 0.7, 'idiot': 0.8, 'moron': 0.8,
+            'ridiculous': 0.6, 'pathetic': 0.8, 'disaster': 0.7, 'broken': 0.6,
+            'furious': 0.8, 'angry': 0.7, 'pissed': 0.8, 'annoying': 0.6,
+            'never': 0.5, 'worst': 0.9, 'horrendous': 0.9, 'appalling': 0.8,
+            'unacceptable': 0.7, 'failure': 0.7, 'waste': 0.6, 'pointless': 0.7
+        }
+    
+    def calculate_enhanced_negativity(self, text):
+        """Enhanced negativity calculation combining VADER and custom lexicon"""
+        text_lower = text.lower()
+        
+        # Get VADER score
+        vader_scores = self.analyzer.polarity_scores(text)
+        vader_negativity = vader_scores['neg'] * 100
+        
+        # Calculate lexicon-based negativity
+        words = word_tokenize(text_lower)
+        lexicon_score = 0
+        negative_word_count = 0
+        
+        for word in words:
+            if word in self.negative_lexicon:
+                lexicon_score += self.negative_lexicon[word]
+                negative_word_count += 1
+        
+        # Normalize lexicon score to percentage
+        if words:
+            lexicon_negativity = (lexicon_score / len(words)) * 100
+        else:
+            lexicon_negativity = 0
+        
+        # Combine both scores (weighted average)
+        final_negativity = (vader_negativity * 0.6) + (lexicon_negativity * 0.4)
+        
+        return min(final_negativity, 100), vader_scores, negative_word_count
     
     def analyze_sentence_level_negativity(self, text):
-        """Analyze negativity at sentence level for more granular insights"""
+        """Analyze negativity at sentence level"""
         sentences = re.split(r'[.!?]+', text)
         sentences = [s.strip() for s in sentences if s.strip()]
         
         sentence_analysis = []
         for sentence in sentences:
             if sentence:
-                scores = self.analyzer.polarity_scores(sentence)
+                negativity, scores, _ = self.calculate_enhanced_negativity(sentence)
                 sentence_analysis.append({
                     'sentence': sentence,
-                    'negativity': scores['neg'] * 100,
+                    'negativity': negativity,
                     'compound': scores['compound']
                 })
         
@@ -145,21 +178,39 @@ class AdvancedNegativityAnalyzer:
 
 class TextRewriter:
     def __init__(self):
-        self.analyzer = SentimentIntensityAnalyzer()
+        self.analyzer = EnhancedNegativityAnalyzer()
+        self.client = None
+        self.openai_available = False
         
-    def get_synonyms(self, word):
-        """Get synonyms for a word using WordNet"""
-        synonyms = set()
-        for syn in wordnet.synsets(word):
-            for lemma in syn.lemmas():
-                synonym = lemma.name().replace('_', ' ')
-                if synonym != word and len(synonym.split()) == 1:
-                    synonyms.add(synonym)
-        return list(synonyms)[:3]  # Return top 3 synonyms
+        # Initialize OpenAI if API key is available
+        if os.getenv('OPENAI_API_KEY'):
+            try:
+                self.client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+                self.openai_available = True
+            except Exception as e:
+                st.warning(f"OpenAI initialization failed: {e}")
+    
+    def rewrite_with_openai(self, text):
+        """Rewrites text to be positive and constructive using OpenAI"""
+        if not self.openai_available:
+            return "OpenAI API not available. Please check your API key."
+        
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant that specializes in rewriting text to be positive, professional, and constructive while preserving the original meaning. Always respond with just the rewritten text."},
+                    {"role": "user", "content": f"Rewrite this text to be positive and constructive: '{text}'"}
+                ],
+                max_tokens=150,
+                temperature=0.7
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            return f"Error in OpenAI rewrite: {str(e)}"
     
     def rule_based_rewrite(self, text):
         """Rule-based text rewriting to reduce negativity"""
-        # Common negative patterns and their neutral alternatives
         replacement_patterns = {
             r'\b(hate|detest|despise)\b': 'dislike',
             r'\b(awful|terrible|horrible)\b': 'disappointing',
@@ -180,7 +231,6 @@ class TextRewriter:
     
     def structural_rewrite(self, text):
         """Rewrite by changing sentence structure to be more constructive"""
-        # Convert negative statements to constructive feedback
         structural_patterns = [
             (r'\b(I hate|I can\'t stand|I despise)\b', 'I would prefer'),
             (r'\b(This is|It\'s) (awful|terrible|horrible)\b', 'This could be improved'),
@@ -195,12 +245,55 @@ class TextRewriter:
         
         # Add constructive framing
         if not any(phrase in rewritten.lower() for phrase in ['suggest', 'recommend', 'improve', 'better']):
-            if rewritten[-1] in ['.', '!', '?']:
+            if rewritten and rewritten[-1] in ['.', '!', '?']:
                 rewritten = rewritten[:-1] + ". I suggest some improvements could be made."
             else:
                 rewritten += " I believe this could be improved."
         
         return rewritten
+    
+    def generate_rewrites(self, text):
+        """Generate multiple rewritten versions"""
+        rewrites = {}
+        
+        # Rule-based rewrite
+        rule_based = self.rule_based_rewrite(text)
+        rule_negativity, _, _ = self.analyzer.calculate_enhanced_negativity(rule_based)
+        rewrites["Neutral Language"] = {
+            "text": rule_based,
+            "negativity": rule_negativity,
+            "description": "Replaced harsh words with neutral alternatives"
+        }
+        
+        # Structural rewrite
+        structural = self.structural_rewrite(text)
+        struct_negativity, _, _ = self.analyzer.calculate_enhanced_negativity(structural)
+        rewrites["Constructive Feedback"] = {
+            "text": structural,
+            "negativity": struct_negativity,
+            "description": "Reframed as constructive feedback with suggestions"
+        }
+        
+        # AI-powered rewrite (if available)
+        if self.openai_available:
+            ai_rewrite = self.rewrite_with_openai(text)
+            ai_negativity, _, _ = self.analyzer.calculate_enhanced_negativity(ai_rewrite)
+            rewrites["AI Optimized"] = {
+                "text": ai_rewrite,
+                "negativity": ai_negativity,
+                "description": "AI-powered positive reconstruction"
+            }
+        else:
+            # Fallback soft rewrite
+            soft = self.soft_rewrite(text)
+            soft_negativity, _, _ = self.analyzer.calculate_enhanced_negativity(soft)
+            rewrites["Softer Tone"] = {
+                "text": soft,
+                "negativity": soft_negativity,
+                "description": "Maintained message with softened language"
+            }
+        
+        return rewrites
     
     def soft_rewrite(self, text):
         """Soften the language while maintaining the core message"""
@@ -219,58 +312,32 @@ class TextRewriter:
             rewritten = re.sub(pattern, replacement, rewritten, flags=re.IGNORECASE)
         
         return rewritten
-    
-    def generate_rewrites(self, text):
-        """Generate multiple rewritten versions"""
-        rewrites = {}
-        
-        # Rule-based rewrite
-        rule_based = self.rule_based_rewrite(text)
-        rule_negativity, _ = self.analyzer.calculate_negativity_percentage(rule_based)
-        rewrites["Neutral Language"] = {
-            "text": rule_based,
-            "negativity": rule_negativity,
-            "description": "Replaced harsh words with neutral alternatives"
-        }
-        
-        # Structural rewrite
-        structural = self.structural_rewrite(text)
-        struct_negativity, _ = self.analyzer.calculate_negativity_percentage(structural)
-        rewrites["Constructive Feedback"] = {
-            "text": structural,
-            "negativity": struct_negativity,
-            "description": "Reframed as constructive feedback with suggestions"
-        }
-        
-        # Soft rewrite
-        soft = self.soft_rewrite(text)
-        soft_negativity, _ = self.analyzer.calculate_negativity_percentage(soft)
-        rewrites["Softer Tone"] = {
-            "text": soft,
-            "negativity": soft_negativity,
-            "description": "Maintained message with softened language"
-        }
-        
-        return rewrites
 
 def main():
     # Header Section
     st.markdown("""
     <div class="header-section">
-        <h1 style="margin:0; font-size: 2.5rem;">Negativity Analysis Platform</h1>
+        <h1 style="margin:0; font-size: 2.5rem;">Advanced Negativity Analysis Platform</h1>
         <p style="margin:0; font-size: 1.1rem; opacity: 0.9;">
-        AI-powered sentiment analysis and constructive communication assistant
+        AI-powered sentiment analysis with intelligent rewriting
         </p>
     </div>
     """, unsafe_allow_html=True)
     
     # Initialize analyzers
     if 'analyzer' not in st.session_state:
-        st.session_state.analyzer = AdvancedNegativityAnalyzer()
+        st.session_state.analyzer = EnhancedNegativityAnalyzer()
     if 'rewriter' not in st.session_state:
         st.session_state.rewriter = TextRewriter()
     if 'selected_rewrite' not in st.session_state:
         st.session_state.selected_rewrite = None
+    
+    # OpenAI status
+    if st.session_state.rewriter.openai_available:
+        st.success("✅ OpenAI integration active - AI rewriting enabled")
+    else:
+        st.warning("⚠️ OpenAI not configured - using rule-based rewriting only")
+        st.info("To enable AI rewriting, create a .env file with your OPENAI_API_KEY")
     
     # Input Section
     st.markdown("### Analyze Your Text")
@@ -284,8 +351,8 @@ def main():
     if st.button("Analyze Sentiment", use_container_width=True):
         if user_text.strip():
             with st.spinner("Analyzing sentiment..."):
-                # Perform analysis
-                negativity_score, full_scores = st.session_state.analyzer.calculate_negativity_percentage(user_text)
+                # Perform enhanced analysis
+                negativity_score, full_scores, negative_words = st.session_state.analyzer.calculate_enhanced_negativity(user_text)
                 sentence_analysis = st.session_state.analyzer.analyze_sentence_level_negativity(user_text)
                 sentiment_label, sentiment_color = st.session_state.analyzer.get_sentiment_label(negativity_score)
                 
@@ -296,7 +363,8 @@ def main():
                     'full_scores': full_scores,
                     'sentence_analysis': sentence_analysis,
                     'sentiment_label': sentiment_label,
-                    'sentiment_color': sentiment_color
+                    'sentiment_color': sentiment_color,
+                    'negative_word_count': negative_words
                 }
                 
                 # Generate rewrites if needed
@@ -311,7 +379,7 @@ def main():
         st.markdown("### Analysis Results")
         
         # Metrics
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         
         with col1:
             st.markdown(f"""
@@ -338,15 +406,13 @@ def main():
             </div>
             """, unsafe_allow_html=True)
         
-        # Detailed sentiment scores
-        st.markdown("#### Detailed Sentiment Analysis")
-        sentiment_cols = st.columns(4)
-        with sentiment_cols[0]:
-            st.metric("Positive", f"{results['full_scores']['pos']*100:.1f}%")
-        with sentiment_cols[1]:
-            st.metric("Negative", f"{results['full_scores']['neg']*100:.1f}%")
-        with sentiment_cols[2]:
-            st.metric("Neutral", f"{results['full_scores']['neu']*100:.1f}%")
+        with col4:
+            st.markdown(f"""
+            <div class="metric-card">
+                <h3 style="color: #FF6B6B; margin:0;">{results['negative_word_count']}</h3>
+                <p style="margin:0; color: #666;">Negative Words</p>
+            </div>
+            """, unsafe_allow_html=True)
         
         # Negativity Alert and Rewriting Options
         if results['negativity_score'] > 50:
@@ -363,11 +429,16 @@ def main():
             if 'rewrites' in st.session_state:
                 for i, (name, rewrite_data) in enumerate(st.session_state.rewrites.items()):
                     reduction = results['negativity_score'] - rewrite_data['negativity']
+                    is_ai = "AI" in name
                     
                     with st.container():
+                        css_class = "rewrite-option ai-rewrite" if is_ai else "rewrite-option"
+                        if st.session_state.selected_rewrite == name:
+                            css_class += " selected-rewrite"
+                            
                         st.markdown(f"""
-                        <div class="rewrite-option {'selected-rewrite' if st.session_state.selected_rewrite == name else ''}">
-                            <h4>{name}</h4>
+                        <div class="{css_class}">
+                            <h4>{name} {"🤖" if is_ai else ""}</h4>
                             <p><strong>Description:</strong> {rewrite_data['description']}</p>
                             <p><strong>Negativity Reduction:</strong> <span style="color: #4CAF50;">-{reduction:.1f}%</span></p>
                             <p><strong>New Score:</strong> {rewrite_data['negativity']:.1f}%</p>
@@ -412,7 +483,7 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style="text-align: center; color: #666; font-size: 0.9rem;">
-        <p>Negativity Analysis Platform • Powered by VADER Sentiment Analysis • Professional Communication Assistant</p>
+        <p>Advanced Negativity Analysis Platform • Powered by VADER + OpenAI • Professional Communication Assistant</p>
     </div>
     """, unsafe_allow_html=True)
 
